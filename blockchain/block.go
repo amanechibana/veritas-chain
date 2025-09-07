@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"time"
 )
@@ -107,4 +108,42 @@ func (b *Block) GetCertificateCount() int {
 // Genesis creates the first block in the blockchain
 func Genesis() *Block {
 	return NewBlock([]string{}, []byte{}, 0, "genesis")
+}
+
+// Validate checks if a block is valid
+func (b *Block) Validate() error {
+	// Check if hash is correct
+	calculatedHash := b.CalculateHash()
+	if !bytes.Equal(b.Hash, calculatedHash) {
+		return fmt.Errorf("invalid block hash: expected %x, got %x", calculatedHash, b.Hash)
+	}
+
+	// Check if height is non-negative
+	if b.Height < 0 {
+		return fmt.Errorf("invalid block height: %d", b.Height)
+	}
+
+	// Check if timestamp is reasonable (not in the future)
+	currentTime := time.Now().Unix()
+	if b.Timestamp > currentTime+3600 { // Allow 1 hour in the future for clock skew
+		return fmt.Errorf("block timestamp is too far in the future: %d", b.Timestamp)
+	}
+
+	// Check if university address is not empty (except for genesis)
+	if b.Height > 0 && b.UniversityAddress == "" {
+		return fmt.Errorf("university address cannot be empty for non-genesis blocks")
+	}
+
+	// Check if certificate hashes are valid hex strings
+	for i, certHash := range b.CertificateHashes {
+		if len(certHash) != 64 { // SHA-256 hex string should be 64 characters
+			return fmt.Errorf("invalid certificate hash at index %d: expected 64 hex chars, got %d", i, len(certHash))
+		}
+		// Try to decode to verify it's valid hex
+		if _, err := hex.DecodeString(certHash); err != nil {
+			return fmt.Errorf("invalid certificate hash at index %d: not valid hex", i)
+		}
+	}
+
+	return nil
 }
