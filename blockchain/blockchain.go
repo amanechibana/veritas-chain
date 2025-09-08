@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/amanechibana/veritas-chain/identity"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -73,7 +74,7 @@ func ContinueBlockchain() *Blockchain {
 
 }
 
-func InitBlockchain() *Blockchain {
+func InitBlockchain(universityIdentity *identity.Identity) *Blockchain {
 	opts := badger.DefaultOptions(dbPath)
 	opts.Dir = dbPath
 	opts.ValueDir = dbPath
@@ -85,7 +86,7 @@ func InitBlockchain() *Blockchain {
 
 	// Check if blockchain already exists
 	if DBExists() {
-		// Load existing blockchain
+		// Try to load existing blockchain
 		var lastHash []byte
 		err = db.View(func(txn *badger.Txn) error {
 			item, err := txn.Get([]byte("lh"))
@@ -98,16 +99,29 @@ func InitBlockchain() *Blockchain {
 			})
 		})
 		if err != nil {
-			log.Panic(err)
+			// If we can't load the existing blockchain (corrupted/incomplete),
+			// close the database and recreate it
+			fmt.Println("Existing blockchain is corrupted or incomplete, recreating...")
+			db.Close()
+
+			// Remove the corrupted database files
+			os.RemoveAll(dbPath)
+
+			// Reopen the database
+			db, err = badger.Open(opts)
+			if err != nil {
+				log.Panic(err)
+			}
+		} else {
+			fmt.Println("Loaded existing blockchain")
+			return &Blockchain{lastHash, db}
 		}
-		fmt.Println("Loaded existing blockchain")
-		return &Blockchain{lastHash, db}
 	}
 
 	// Create new blockchain with genesis block
 	var lastHash []byte
 	err = db.Update(func(txn *badger.Txn) error {
-		genesis := Genesis()
+		genesis := Genesis(universityIdentity)
 		encodedBlock := genesis.Serialize()
 		err := txn.Set(genesis.Hash, encodedBlock)
 		if err != nil {
@@ -126,7 +140,7 @@ func InitBlockchain() *Blockchain {
 	return &Blockchain{lastHash, db}
 }
 
-func (chain *Blockchain) AddBlock(certificateIDs []string) *Block {
+func (chain *Blockchain) AddBlock(certificateIDs []string, universityIdentity *identity.Identity) *Block {
 	var lastHash []byte
 	var prevBlock *Block
 
@@ -161,7 +175,7 @@ func (chain *Blockchain) AddBlock(certificateIDs []string) *Block {
 
 	// Calculate height: previous block height + 1
 	newHeight := prevBlock.Height + 1
-	newBlock := NewBlock(certificateIDs, lastHash, newHeight, "harvard")
+	newBlock := NewBlock(certificateIDs, lastHash, newHeight, universityIdentity)
 
 	err = chain.Database.Update(func(txn *badger.Txn) error {
 		err := txn.Set(newBlock.Hash, newBlock.Serialize())
@@ -176,6 +190,8 @@ func (chain *Blockchain) AddBlock(certificateIDs []string) *Block {
 	if err != nil {
 		log.Panic(err)
 	}
+
+	newBlock.Sign(universityIdentity.PrivateKey)
 
 	return newBlock
 }

@@ -2,13 +2,18 @@ package blockchain
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"log"
+	"math/big"
 	"time"
+
+	"github.com/amanechibana/veritas-chain/identity"
 )
 
 // Block represents a simple block in the Veritas Chain
@@ -18,22 +23,28 @@ type Block struct {
 	PrevHash          []byte   `json:"prev_hash"`
 	Height            int      `json:"height"`
 	CertificateHashes []string `json:"certificate_hashes"` // Hashed certificate IDs
-	UniversityAddress string   `json:"university_address"`
+	Signature         []byte   `json:"signature"`          // Digital signature of the block
 }
 
 // NewBlock creates a new block with certificate hashes
-func NewBlock(certificateIDs []string, prevHash []byte, height int, universityAddress string) *Block {
+func NewBlock(certificateIDs []string, prevHash []byte, height int, universityIdentity *identity.Identity) *Block {
+
 	block := &Block{
 		Timestamp:         time.Now().Unix(),
 		Hash:              []byte{},
 		PrevHash:          prevHash,
 		Height:            height,
-		UniversityAddress: universityAddress,
 		CertificateHashes: hashCertificateIDs(certificateIDs),
 	}
 
-	pow := NewProof(block, universityAddress)
-	err := pow.Run()
+	// Sign the block with the university's private key
+	err := block.Sign(universityIdentity.PrivateKey)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	pow := NewProof(block, universityIdentity.PrivateKey.PublicKey)
+	err = pow.Run()
 
 	if err != nil {
 		log.Panic(err)
@@ -45,8 +56,8 @@ func NewBlock(certificateIDs []string, prevHash []byte, height int, universityAd
 }
 
 // Genesis creates the first block in the blockchain
-func Genesis() *Block {
-	return NewBlock([]string{}, []byte{}, 0, "genesis")
+func Genesis(universityIdentity *identity.Identity) *Block {
+	return NewBlock([]string{}, []byte{}, 0, universityIdentity)
 }
 
 func (b *Block) Serialize() []byte {
@@ -80,7 +91,7 @@ func hashCertificateIDs(certificateIDs []string) []string {
 	return hashes
 }
 
-// CalculateHash calculates the hash of the block
+// CalculateHash calculates the hash of the block (including signature)
 func (b *Block) CalculateHash() []byte {
 	data := bytes.Join(
 		[][]byte{
@@ -88,7 +99,23 @@ func (b *Block) CalculateHash() []byte {
 			b.HashCertificates(),
 			ToHex(int64(b.Timestamp)),
 			ToHex(int64(b.Height)),
-			[]byte(b.UniversityAddress),
+			b.Signature,
+		},
+		[]byte{},
+	)
+
+	hash := sha256.Sum256(data)
+	return hash[:]
+}
+
+// CalculateHashForSigning calculates the hash of the block for signing (excluding signature)
+func (b *Block) CalculateHashForSigning() []byte {
+	data := bytes.Join(
+		[][]byte{
+			b.PrevHash,
+			b.HashCertificates(),
+			ToHex(int64(b.Timestamp)),
+			ToHex(int64(b.Height)),
 		},
 		[]byte{},
 	)
@@ -151,11 +178,6 @@ func (b *Block) Validate() error {
 		return fmt.Errorf("block timestamp is too far in the future: %d", b.Timestamp)
 	}
 
-	// Check if university address is not empty (except for genesis)
-	if b.Height > 0 && b.UniversityAddress == "" {
-		return fmt.Errorf("university address cannot be empty for non-genesis blocks")
-	}
-
 	// Check if certificate hashes are valid hex strings
 	for i, certHash := range b.CertificateHashes {
 		if len(certHash) != 64 { // SHA-256 hex string should be 64 characters
@@ -168,4 +190,53 @@ func (b *Block) Validate() error {
 	}
 
 	return nil
+}
+
+// Sign signs the block with the provided private key
+func (block *Block) Sign(privateKey ecdsa.PrivateKey) error {
+	// 1. Create a hash of the block data (excluding signature)
+	blockHash := block.CalculateHashForSigning()
+
+	// 2. Sign the hash
+	r, s, err := ecdsa.Sign(rand.Reader, &privateKey, blockHash)
+
+	if err != nil {
+		return err
+	}
+
+	// 3. Combine r and s into a single signature
+	signature := append(r.Bytes(), s.Bytes()...)
+
+	// 4. Store the signature
+	block.Signature = signature
+
+	return nil
+}
+
+// Verify verifies the block's signature using the provided public key
+func (b *Block) Verify(publicKey ecdsa.PublicKey) bool {
+	// 1. Check if signature exists
+	if len(b.Signature) == 0 {
+		return false
+	}
+
+	// 2. Create the same hash that was signed
+	blockHash := b.CalculateHashForSigning()
+
+	// 3. Split the signature back into r and s components
+	sigLen := len(b.Signature)
+	if sigLen%2 != 0 {
+		return false // Signature should have even length (r + s)
+	}
+
+	halfLen := sigLen / 2
+	rBytes := b.Signature[:halfLen]
+	sBytes := b.Signature[halfLen:]
+
+	// 4. Convert bytes back to big.Int
+	r := new(big.Int).SetBytes(rBytes)
+	s := new(big.Int).SetBytes(sBytes)
+
+	// 5. Verify the signature
+	return ecdsa.Verify(&publicKey, blockHash, r, s)
 }
