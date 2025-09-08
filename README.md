@@ -202,6 +202,7 @@ go build -o veritas main.go
 
 ### Phase 1: Core Infrastructure
 - **Merkle Trees**: Implement Merkle trees for efficient certificate verification
+- **Merkle Storage Strategy**: Evaluate keeping only Merkle root (with external cert→block index and on-demand proof service) vs. storing `CertificateHashes` in blocks for simpler proof generation during development
 - **Network Layer**: Add P2P networking for multi-university consensus
 - **Node Discovery**: Implement network discovery and peer management
 - **Block Propagation**: Share blocks across university nodes
@@ -231,7 +232,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-- Inspired by @TensorProgramming's guide to blockchain with golang on youtube
+- Inspired/Based on @TensorProgramming's guide to blockchain with golang on youtube
 
 ---
 
