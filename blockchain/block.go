@@ -24,6 +24,7 @@ type Block struct {
 	Height            int      `json:"height"`
 	CertificateHashes []string `json:"certificate_hashes"` // Hashed certificate IDs
 	Signature         []byte   `json:"signature"`          // Digital signature of the block
+	MerkleRoot        []byte   `json:"merkle_root"`        // Merkle tree of the block
 }
 
 // NewBlock creates a new block with certificate hashes
@@ -35,6 +36,7 @@ func NewBlock(certificateIDs []string, prevHash []byte, height int, universityId
 		PrevHash:          prevHash,
 		Height:            height,
 		CertificateHashes: hashCertificateIDs(certificateIDs),
+		MerkleRoot:        BuildMerkleTree(certificateIDs).Root.Data,
 	}
 
 	// Sign the block with the university's private key
@@ -91,12 +93,17 @@ func hashCertificateIDs(certificateIDs []string) []string {
 	return hashes
 }
 
+func BuildMerkleTree(certificateIDs []string) *MerkleTree {
+	return NewMerkleTree(certificateIDs)
+}
+
 // CalculateHash calculates the hash of the block (including signature)
 func (b *Block) CalculateHash() []byte {
 	data := bytes.Join(
 		[][]byte{
 			b.PrevHash,
 			b.HashCertificates(),
+			b.MerkleRoot,
 			ToHex(int64(b.Timestamp)),
 			ToHex(int64(b.Height)),
 			b.Signature,
@@ -114,6 +121,7 @@ func (b *Block) CalculateHashForSigning() []byte {
 		[][]byte{
 			b.PrevHash,
 			b.HashCertificates(),
+			b.MerkleRoot,
 			ToHex(int64(b.Timestamp)),
 			ToHex(int64(b.Height)),
 		},
@@ -152,44 +160,6 @@ func (b *Block) VerifyCertificate(certificateID string) bool {
 		}
 	}
 	return false
-}
-
-// GetCertificateCount returns the number of certificates in this block
-func (b *Block) GetCertificateCount() int {
-	return len(b.CertificateHashes)
-}
-
-// Validate checks if a block is valid
-func (b *Block) Validate() error {
-	// Check if hash is correct
-	calculatedHash := b.CalculateHash()
-	if !bytes.Equal(b.Hash, calculatedHash) {
-		return fmt.Errorf("invalid block hash: expected %x, got %x", calculatedHash, b.Hash)
-	}
-
-	// Check if height is non-negative
-	if b.Height < 0 {
-		return fmt.Errorf("invalid block height: %d", b.Height)
-	}
-
-	// Check if timestamp is reasonable (not in the future)
-	currentTime := time.Now().Unix()
-	if b.Timestamp > currentTime+3600 { // Allow 1 hour in the future for clock skew
-		return fmt.Errorf("block timestamp is too far in the future: %d", b.Timestamp)
-	}
-
-	// Check if certificate hashes are valid hex strings
-	for i, certHash := range b.CertificateHashes {
-		if len(certHash) != 64 { // SHA-256 hex string should be 64 characters
-			return fmt.Errorf("invalid certificate hash at index %d: expected 64 hex chars, got %d", i, len(certHash))
-		}
-		// Try to decode to verify it's valid hex
-		if _, err := hex.DecodeString(certHash); err != nil {
-			return fmt.Errorf("invalid certificate hash at index %d: not valid hex", i)
-		}
-	}
-
-	return nil
 }
 
 // Sign signs the block with the provided private key
@@ -239,4 +209,77 @@ func (b *Block) Verify(publicKey ecdsa.PublicKey) bool {
 
 	// 5. Verify the signature
 	return ecdsa.Verify(&publicKey, blockHash, r, s)
+}
+
+// GetCertificateCount returns the number of certificates in this block
+func (b *Block) GetCertificateCount() int {
+	return len(b.CertificateHashes)
+}
+
+// Validate checks if a block is valid
+func (b *Block) Validate() error {
+	// Check if hash is correct
+	calculatedHash := b.CalculateHash()
+	if !bytes.Equal(b.Hash, calculatedHash) {
+		return fmt.Errorf("invalid block hash: expected %x, got %x", calculatedHash, b.Hash)
+	}
+
+	// Check if height is non-negative
+	if b.Height < 0 {
+		return fmt.Errorf("invalid block height: %d", b.Height)
+	}
+
+	// Check if timestamp is reasonable (not in the future)
+	currentTime := time.Now().Unix()
+	if b.Timestamp > currentTime+3600 { // Allow 1 hour in the future for clock skew
+		return fmt.Errorf("block timestamp is too far in the future: %d", b.Timestamp)
+	}
+
+	// Check if certificate hashes are valid hex strings
+	for i, certHash := range b.CertificateHashes {
+		if len(certHash) != 64 { // SHA-256 hex string should be 64 characters
+			return fmt.Errorf("invalid certificate hash at index %d: expected 64 hex chars, got %d", i, len(certHash))
+		}
+		// Try to decode to verify it's valid hex
+		if _, err := hex.DecodeString(certHash); err != nil {
+			return fmt.Errorf("invalid certificate hash at index %d: not valid hex", i)
+		}
+	}
+
+	return nil
+}
+
+// GenerateCertificateProof builds a Merkle proof for a given certID using this block's leaves
+func (b *Block) GenerateCertificateProof(certID string) (MerkleProof, bool) {
+	if len(b.CertificateHashes) == 0 || len(b.MerkleRoot) == 0 {
+		return MerkleProof{}, false
+	}
+	// Build leaves from stored hex hashes (stable order)
+	leaves := make([][]byte, 0, len(b.CertificateHashes))
+	idx := -1
+
+	target := sha256.Sum256([]byte(certID))
+	targetHex := hex.EncodeToString(target[:])
+
+	for i, h := range b.CertificateHashes {
+		hb, err := hex.DecodeString(h)
+		if err != nil {
+			return MerkleProof{}, false
+		}
+		leaves = append(leaves, hb)
+		if h == targetHex {
+			idx = i
+		}
+	}
+	if idx == -1 {
+		return MerkleProof{}, false
+	}
+
+	proof := GenerateProof(leaves, idx)
+	return proof, true
+}
+
+// VerifyCertificateWithProof verifies a certID against this block's MerkleRoot using a provided proof
+func (b *Block) VerifyCertificateWithProof(certID string, proof MerkleProof) bool {
+	return VerifyProof([]byte(certID), proof, b.MerkleRoot)
 }

@@ -77,6 +77,27 @@ func main() {
 	} else {
 		fmt.Println("Block 2 signature verification: INVALID")
 	}
+
+	// Merkle proof: present certificate
+	fmt.Println("--- Merkle Proof Tests ---")
+	presentID := "CERT-001"
+	proof, ok := block2.GenerateCertificateProof(presentID)
+	if !ok {
+		fmt.Printf("Failed to generate Merkle proof for %s\n", presentID)
+	} else {
+		verified := block2.VerifyCertificateWithProof(presentID, proof)
+		fmt.Printf("Proof verify for %s: %v\n", presentID, verified)
+	}
+
+	// Merkle proof: absent certificate
+	absentID := "CERT-999"
+	proof2, ok2 := block2.GenerateCertificateProof(absentID)
+	if !ok2 {
+		fmt.Printf("No proof for absent ID %s (as expected)\n", absentID)
+	} else {
+		verified2 := block2.VerifyCertificateWithProof(absentID, proof2)
+		fmt.Printf("Proof verify for absent %s: %v\n", absentID, verified2)
+	}
 	fmt.Println("--------------------------------")
 
 	// Print all blocks using iterator
