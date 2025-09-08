@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -41,6 +42,32 @@ func NewBlock(certificateIDs []string, prevHash []byte, height int, universityAd
 	block.Hash = block.CalculateHash()
 
 	return block
+}
+
+// Genesis creates the first block in the blockchain
+func Genesis() *Block {
+	return NewBlock([]string{}, []byte{}, 0, "genesis")
+}
+
+func (b *Block) Serialize() []byte {
+	var buffer bytes.Buffer
+	encoder := gob.NewEncoder(&buffer)
+
+	if err := encoder.Encode(b); err != nil {
+		log.Panic(err)
+	}
+	return buffer.Bytes()
+}
+
+func Deserialize(data []byte) *Block {
+	var block Block
+	decoder := gob.NewDecoder(bytes.NewReader(data))
+
+	if err := decoder.Decode(&block); err != nil {
+		log.Panic(err)
+	}
+
+	return &block
 }
 
 // hashCertificateIDs takes certificate IDs and returns their SHA-256 hashes as hex strings
@@ -103,11 +130,6 @@ func (b *Block) VerifyCertificate(certificateID string) bool {
 // GetCertificateCount returns the number of certificates in this block
 func (b *Block) GetCertificateCount() int {
 	return len(b.CertificateHashes)
-}
-
-// Genesis creates the first block in the blockchain
-func Genesis() *Block {
-	return NewBlock([]string{}, []byte{}, 0, "genesis")
 }
 
 // Validate checks if a block is valid

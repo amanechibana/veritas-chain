@@ -3,36 +3,225 @@ package blockchain
 import (
 	"bytes"
 	"fmt"
+	"log"
+	"os"
+	"runtime"
+
+	"github.com/dgraph-io/badger/v4"
+)
+
+const (
+	dbPath = "./tmp/blocks"
+	dbFile = "./tmp/blocks/MANIFEST"
 )
 
 type Blockchain struct {
 	LastHash []byte
-	Blocks   []*Block
+	Database *badger.DB
 }
 
-func (bc *Blockchain) AddBlock(certificateIDs []string) {
-	prevBlock := bc.Blocks[len(bc.Blocks)-1]
-	newBlock := NewBlock(certificateIDs, prevBlock.Hash, len(bc.Blocks), "harvard")
-	bc.Blocks = append(bc.Blocks, newBlock)
-	bc.LastHash = newBlock.Hash
+type BlockchainIterator struct {
+	CurrentHash []byte
+	Database    *badger.DB
+}
+
+func DBExists() bool {
+	if _, err := os.Stat(dbFile); os.IsNotExist(err) {
+		return false
+	}
+
+	return true
+}
+
+func ContinueBlockchain() *Blockchain {
+	if !DBExists() {
+		fmt.Println("No blockchain found")
+		runtime.Goexit()
+	}
+
+	var lastHash []byte
+
+	opts := badger.DefaultOptions(dbPath)
+	opts.Dir = dbPath
+	opts.ValueDir = dbPath
+
+	db, err := badger.Open(opts)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	err = db.Update(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte("lh"))
+		if err != nil {
+			log.Panic(err)
+		}
+		err = item.Value(func(val []byte) error {
+			lastHash = val
+			return nil
+		})
+
+		return err
+	})
+
+	if err != nil {
+		log.Panic(err)
+	}
+
+	chain := Blockchain{lastHash, db}
+
+	return &chain
+
 }
 
 func InitBlockchain() *Blockchain {
-	genesis := Genesis()
-	return &Blockchain{
-		LastHash: genesis.Hash,
-		Blocks:   []*Block{genesis},
+	opts := badger.DefaultOptions(dbPath)
+	opts.Dir = dbPath
+	opts.ValueDir = dbPath
+
+	db, err := badger.Open(opts)
+	if err != nil {
+		log.Panic(err)
 	}
+
+	// Check if blockchain already exists
+	if DBExists() {
+		// Load existing blockchain
+		var lastHash []byte
+		err = db.View(func(txn *badger.Txn) error {
+			item, err := txn.Get([]byte("lh"))
+			if err != nil {
+				return err
+			}
+			return item.Value(func(val []byte) error {
+				lastHash = val
+				return nil
+			})
+		})
+		if err != nil {
+			log.Panic(err)
+		}
+		fmt.Println("Loaded existing blockchain")
+		return &Blockchain{lastHash, db}
+	}
+
+	// Create new blockchain with genesis block
+	var lastHash []byte
+	err = db.Update(func(txn *badger.Txn) error {
+		genesis := Genesis()
+		encodedBlock := genesis.Serialize()
+		err := txn.Set(genesis.Hash, encodedBlock)
+		if err != nil {
+			return err
+		}
+		err = txn.Set([]byte("lh"), genesis.Hash)
+		lastHash = genesis.Hash
+		return err
+	})
+
+	if err != nil {
+		log.Panic(err)
+	}
+
+	fmt.Println("Created new blockchain with genesis block")
+	return &Blockchain{lastHash, db}
+}
+
+func (chain *Blockchain) AddBlock(certificateIDs []string) *Block {
+	var lastHash []byte
+	var prevBlock *Block
+
+	// Get the previous block to determine height
+	err := chain.Database.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte("lh"))
+		if err != nil {
+			return err
+		}
+		err = item.Value(func(val []byte) error {
+			lastHash = val
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		// Get the previous block to calculate height
+		item, err = txn.Get(lastHash)
+		if err != nil {
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			prevBlock = Deserialize(val)
+			return nil
+		})
+	})
+
+	if err != nil {
+		log.Panic(err)
+	}
+
+	// Calculate height: previous block height + 1
+	newHeight := prevBlock.Height + 1
+	newBlock := NewBlock(certificateIDs, lastHash, newHeight, "harvard")
+
+	err = chain.Database.Update(func(txn *badger.Txn) error {
+		err := txn.Set(newBlock.Hash, newBlock.Serialize())
+		if err != nil {
+			log.Panic(err)
+		}
+		err = txn.Set([]byte("lh"), newBlock.Hash)
+		chain.LastHash = newBlock.Hash
+		return err
+	})
+
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return newBlock
 }
 
 // ValidateChain checks if the entire blockchain is valid
 func (bc *Blockchain) ValidateChain() error {
-	if len(bc.Blocks) == 0 {
+	// Check if blockchain is empty
+	if len(bc.LastHash) == 0 {
 		return fmt.Errorf("blockchain is empty")
 	}
 
+	// Load all blocks into memory for validation (we need to validate in order)
+	var blocks []*Block
+	currentHash := append([]byte{}, bc.LastHash...)
+
+	// Walk backwards from last block to genesis
+	for {
+		var data []byte
+		err := bc.Database.View(func(txn *badger.Txn) error {
+			item, err := txn.Get(currentHash)
+			if err != nil {
+				return err
+			}
+			return item.Value(func(val []byte) error {
+				data = append([]byte{}, val...)
+				return nil
+			})
+		})
+		if err != nil {
+			return fmt.Errorf("failed to load block: %v", err)
+		}
+		block := Deserialize(data)
+		blocks = append(blocks, block)
+		if len(block.PrevHash) == 0 { // reached genesis
+			break
+		}
+		currentHash = block.PrevHash
+	}
+
+	// Reverse to get oldest->newest order
+	for i, j := 0, len(blocks)-1; i < j; i, j = i+1, j-1 {
+		blocks[i], blocks[j] = blocks[j], blocks[i]
+	}
+
 	// Validate genesis block
-	genesis := bc.Blocks[0]
+	genesis := blocks[0]
 	if genesis.Height != 0 {
 		return fmt.Errorf("first block must be genesis block with height 0, got %d", genesis.Height)
 	}
@@ -44,9 +233,9 @@ func (bc *Blockchain) ValidateChain() error {
 	}
 
 	// Validate all other blocks
-	for i := 1; i < len(bc.Blocks); i++ {
-		block := bc.Blocks[i]
-		prevBlock := bc.Blocks[i-1]
+	for i := 1; i < len(blocks); i++ {
+		block := blocks[i]
+		prevBlock := blocks[i-1]
 
 		// Validate individual block
 		if err := block.Validate(); err != nil {
@@ -72,10 +261,48 @@ func (bc *Blockchain) ValidateChain() error {
 	}
 
 	// Check if LastHash matches the last block
-	lastBlock := bc.Blocks[len(bc.Blocks)-1]
+	lastBlock := blocks[len(blocks)-1]
 	if !bytes.Equal(bc.LastHash, lastBlock.Hash) {
 		return fmt.Errorf("LastHash mismatch: expected %x, got %x", lastBlock.Hash, bc.LastHash)
 	}
 
+	return nil
+}
+
+// Iterator creates a new blockchain iterator
+func (bc *Blockchain) Iterator() *BlockchainIterator {
+	return &BlockchainIterator{
+		CurrentHash: bc.LastHash,
+		Database:    bc.Database,
+	}
+}
+
+// Next returns the next block in the chain (newest to oldest)
+func (iter *BlockchainIterator) Next() *Block {
+	var block *Block
+	err := iter.Database.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(iter.CurrentHash)
+		if err != nil {
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			block = Deserialize(val)
+			return nil
+		})
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	// Update CurrentHash to the previous block's hash
+	iter.CurrentHash = block.PrevHash
+	return block
+}
+
+// Close closes the underlying database
+func (bc *Blockchain) Close() error {
+	if bc.Database != nil {
+		return bc.Database.Close()
+	}
 	return nil
 }
