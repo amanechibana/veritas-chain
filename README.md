@@ -119,7 +119,6 @@ veritas-chain/
 │   ├── identity.go     # Identity structure and cryptography
 │   ├── identities.go   # Identity management and persistence
 │   └── utils.go        # Serialization and utility functions
-├── docs/               # Documentation
 ├── tmp/                # Runtime data storage
 │   ├── blocks/         # BadgerDB blockchain data
 │   └── identities.data # University identity persistence
@@ -127,17 +126,6 @@ veritas-chain/
 ├── go.mod              # Go module dependencies
 └── README.md           # This file
 ```
-
-## Documentation
-
-- 📋 [Project Brief](docs/PROJECT_BRIEF.md) - Detailed project overview and objectives
-- 🏗️ [Technical Overview](docs/TECHNICAL_OVERVIEW.md) - Architecture and implementation details
-- 🔌 [API Documentation](docs/API_DOCUMENTATION.md) - REST and gRPC API references
-- 🔒 [Security Framework](docs/SECURITY.md) - Security model and threat analysis
-- 🚀 [Deployment Guide](docs/DEPLOYMENT.md) - Setup and operations manual
-- 📊 [CLI Reference](docs/CLI_REFERENCE.md) - Command-line interface guide
-
-## Technical Implementation
 
 ### Blockchain Features
 - **Proof-of-Authority Consensus**: Only authorized universities can create blocks
