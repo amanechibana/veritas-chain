@@ -127,6 +127,16 @@ func GetUniversityIdentity(universityName string) (*identity.Identity, error) {
 	return &universityIdentity, nil
 }
 
+// GetIdentityByAddress returns the identity for a given address
+func GetIdentityByAddress(address string) (*identity.Identity, error) {
+	if UniversityIdentities == nil {
+		return nil, errors.New("university identities not initialized")
+	}
+
+	universityIdentity := UniversityIdentities.GetIdentity(address)
+	return &universityIdentity, nil
+}
+
 // AddAuthorizedUniversity adds a new university to the authorized list
 func AddAuthorizedUniversity(name string) (string, error) {
 	return CreateUniversityIdentity(name)
