@@ -26,6 +26,11 @@ type BlockchainIterator struct {
 	Database    *badger.DB
 }
 
+type BlockchainStats struct {
+	BlockCount       int
+	CertificateCount int
+}
+
 func DBExists() bool {
 	if _, err := os.Stat(dbFile); os.IsNotExist(err) {
 		return false
@@ -283,6 +288,29 @@ func (bc *Blockchain) ValidateChain() error {
 	}
 
 	return nil
+}
+
+func (chain *Blockchain) GetStats() BlockchainStats {
+	var blockCount int
+	var certificateCount int
+
+	// Count blocks and certificates by iterating through the chain
+	iter := chain.Iterator()
+	for {
+		block := iter.Next()
+		blockCount++
+		certificateCount += len(block.CertificateHashes)
+
+		// Stop when we reach the genesis block (PrevHash is empty)
+		if len(block.PrevHash) == 0 {
+			break
+		}
+	}
+
+	return BlockchainStats{
+		BlockCount:       blockCount,
+		CertificateCount: certificateCount,
+	}
 }
 
 // Iterator creates a new blockchain iterator
