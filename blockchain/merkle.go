@@ -3,7 +3,6 @@ package blockchain
 import (
 	"bytes"
 	"crypto/sha256"
-	"log"
 )
 
 type MerkleTree struct {
@@ -43,7 +42,9 @@ func NewMerkleTree(certificateIDs []string) *MerkleTree {
 	var nodes []MerkleNode
 
 	if len(certificateIDs) == 0 {
-		log.Panic("No certificate IDs provided")
+		// For empty certificate lists (like genesis block), create a single node with empty data
+		emptyNode := NewMerkleNode(nil, nil, []byte("GENESIS"))
+		return &MerkleTree{Root: emptyNode}
 	}
 
 	if len(certificateIDs)%2 != 0 {
