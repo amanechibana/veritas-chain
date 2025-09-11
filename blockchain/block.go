@@ -25,10 +25,11 @@ type Block struct {
 	CertificateHashes []string `json:"certificate_hashes"` // Hashed certificate IDs
 	Signature         []byte   `json:"signature"`          // Digital signature of the block
 	MerkleRoot        []byte   `json:"merkle_root"`        // Merkle tree of the block
+	UniversityAddress []byte   `json:"university_address"` // University address that created this block
 }
 
 // NewBlock creates a new block with certificate hashes
-func NewBlock(certificateIDs []string, prevHash []byte, height int, universityIdentity *identity.Identity) *Block {
+func NewBlock(certificateIDs []string, prevHash []byte, height int, signer identity.Signer) *Block {
 
 	block := &Block{
 		Timestamp:         time.Now().Unix(),
@@ -37,15 +38,16 @@ func NewBlock(certificateIDs []string, prevHash []byte, height int, universityId
 		Height:            height,
 		CertificateHashes: hashCertificateIDs(certificateIDs),
 		MerkleRoot:        BuildMerkleTree(certificateIDs).Root.Data,
+		UniversityAddress: signer.Address(),
 	}
 
-	// Sign the block with the university's private key
-	err := block.Sign(universityIdentity.PrivateKey)
+	// Sign the block with the provided signer
+	err := block.SignWithSigner(signer)
 	if err != nil {
 		log.Panic(err)
 	}
 
-	pow := NewProof(block, universityIdentity.PrivateKey.PublicKey)
+	pow := NewProof(block, signer.PublicKey())
 	err = pow.Run()
 
 	if err != nil {
@@ -58,8 +60,8 @@ func NewBlock(certificateIDs []string, prevHash []byte, height int, universityId
 }
 
 // Genesis creates the first block in the blockchain
-func Genesis(universityIdentity *identity.Identity) *Block {
-	return NewBlock([]string{}, []byte{}, 0, universityIdentity)
+func Genesis(signer identity.Signer) *Block {
+	return NewBlock([]string{}, []byte{}, 0, signer)
 }
 
 func (b *Block) Serialize() []byte {
@@ -180,6 +182,17 @@ func (block *Block) Sign(privateKey ecdsa.PrivateKey) error {
 	// 4. Store the signature
 	block.Signature = signature
 
+	return nil
+}
+
+// SignWithSigner signs the block using the provided signer abstraction.
+func (block *Block) SignWithSigner(signer identity.Signer) error {
+	blockHash := block.CalculateHashForSigning()
+	sig, err := signer.Sign(blockHash)
+	if err != nil {
+		return err
+	}
+	block.Signature = sig
 	return nil
 }
 

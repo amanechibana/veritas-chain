@@ -31,5 +31,6 @@ func Execute() {
 
 func init() {
 	// Global flags that apply to all commands
+	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose output")
 	rootCmd.PersistentFlags().StringP("config", "c", "", "Config file (default is $HOME/.veritas.yaml)")
 }

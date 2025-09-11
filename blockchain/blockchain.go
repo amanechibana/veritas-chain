@@ -5,17 +5,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"github.com/amanechibana/veritas-chain/identity"
 	"github.com/dgraph-io/badger/v4"
 )
 
-const (
-	dbPath = "./tmp/blocks"
-	dbFile = "./tmp/blocks/MANIFEST"
-)
-
+// Blockchain is a handle to the on-disk chain state
 type Blockchain struct {
 	LastHash []byte
 	Database *badger.DB
@@ -31,16 +28,17 @@ type BlockchainStats struct {
 	CertificateCount int
 }
 
-func DBExists() bool {
-	if _, err := os.Stat(dbFile); os.IsNotExist(err) {
+// DBExists checks for Badger MANIFEST to determine if DB exists at given path
+func DBExists(dbPath string) bool {
+	manifest := filepath.Join(dbPath, "MANIFEST")
+	if _, err := os.Stat(manifest); os.IsNotExist(err) {
 		return false
 	}
-
 	return true
 }
 
-func ContinueBlockchain() *Blockchain {
-	if !DBExists() {
+func ContinueBlockchain(dbPath string) *Blockchain {
+	if !DBExists(dbPath) {
 		fmt.Println("No blockchain found")
 		runtime.Goexit()
 	}
@@ -61,12 +59,10 @@ func ContinueBlockchain() *Blockchain {
 		if err != nil {
 			log.Panic(err)
 		}
-		err = item.Value(func(val []byte) error {
+		return item.Value(func(val []byte) error {
 			lastHash = val
 			return nil
 		})
-
-		return err
 	})
 
 	if err != nil {
@@ -74,15 +70,16 @@ func ContinueBlockchain() *Blockchain {
 	}
 
 	chain := Blockchain{lastHash, db}
-
 	return &chain
-
 }
 
-func InitBlockchain(universityIdentity *identity.Identity) *Blockchain {
+func InitBlockchain(dbPath string, signer identity.Signer) *Blockchain {
 	opts := badger.DefaultOptions(dbPath)
 	opts.Dir = dbPath
 	opts.ValueDir = dbPath
+
+	// Ensure directory exists
+	_ = os.MkdirAll(dbPath, 0o755)
 
 	db, err := badger.Open(opts)
 	if err != nil {
@@ -90,7 +87,7 @@ func InitBlockchain(universityIdentity *identity.Identity) *Blockchain {
 	}
 
 	// Check if blockchain already exists
-	if DBExists() {
+	if DBExists(dbPath) {
 		// Try to load existing blockchain
 		var lastHash []byte
 		err = db.View(func(txn *badger.Txn) error {
@@ -104,15 +101,11 @@ func InitBlockchain(universityIdentity *identity.Identity) *Blockchain {
 			})
 		})
 		if err != nil {
-			// If we can't load the existing blockchain (corrupted/incomplete),
-			// close the database and recreate it
+			// If we can't load the existing blockchain (corrupted/incomplete), recreate
 			fmt.Println("Existing blockchain is corrupted or incomplete, recreating...")
 			db.Close()
-
-			// Remove the corrupted database files
 			os.RemoveAll(dbPath)
-
-			// Reopen the database
+			_ = os.MkdirAll(dbPath, 0o755)
 			db, err = badger.Open(opts)
 			if err != nil {
 				log.Panic(err)
@@ -126,15 +119,16 @@ func InitBlockchain(universityIdentity *identity.Identity) *Blockchain {
 	// Create new blockchain with genesis block
 	var lastHash []byte
 	err = db.Update(func(txn *badger.Txn) error {
-		genesis := Genesis(universityIdentity)
+		genesis := Genesis(signer)
 		encodedBlock := genesis.Serialize()
-		err := txn.Set(genesis.Hash, encodedBlock)
-		if err != nil {
+		if err := txn.Set(genesis.Hash, encodedBlock); err != nil {
 			return err
 		}
-		err = txn.Set([]byte("lh"), genesis.Hash)
+		if err := txn.Set([]byte("lh"), genesis.Hash); err != nil {
+			return err
+		}
 		lastHash = genesis.Hash
-		return err
+		return nil
 	})
 
 	if err != nil {
@@ -145,7 +139,7 @@ func InitBlockchain(universityIdentity *identity.Identity) *Blockchain {
 	return &Blockchain{lastHash, db}
 }
 
-func (chain *Blockchain) AddBlock(certificateIDs []string, universityIdentity *identity.Identity) *Block {
+func (chain *Blockchain) AddBlock(certificateIDs []string, signer identity.Signer) (*Block, error) {
 	var lastHash []byte
 	var prevBlock *Block
 
@@ -155,14 +149,12 @@ func (chain *Blockchain) AddBlock(certificateIDs []string, universityIdentity *i
 		if err != nil {
 			return err
 		}
-		err = item.Value(func(val []byte) error {
+		if err = item.Value(func(val []byte) error {
 			lastHash = val
 			return nil
-		})
-		if err != nil {
+		}); err != nil {
 			return err
 		}
-
 		// Get the previous block to calculate height
 		item, err = txn.Get(lastHash)
 		if err != nil {
@@ -173,32 +165,28 @@ func (chain *Blockchain) AddBlock(certificateIDs []string, universityIdentity *i
 			return nil
 		})
 	})
-
 	if err != nil {
-		log.Panic(err)
+		return nil, err
 	}
 
 	// Calculate height: previous block height + 1
 	newHeight := prevBlock.Height + 1
-	newBlock := NewBlock(certificateIDs, lastHash, newHeight, universityIdentity)
+	newBlock := NewBlock(certificateIDs, lastHash, newHeight, signer)
 
 	err = chain.Database.Update(func(txn *badger.Txn) error {
-		err := txn.Set(newBlock.Hash, newBlock.Serialize())
-		if err != nil {
-			log.Panic(err)
+		if err := txn.Set(newBlock.Hash, newBlock.Serialize()); err != nil {
+			return err
 		}
-		err = txn.Set([]byte("lh"), newBlock.Hash)
+		if err := txn.Set([]byte("lh"), newBlock.Hash); err != nil {
+			return err
+		}
 		chain.LastHash = newBlock.Hash
-		return err
+		return nil
 	})
-
 	if err != nil {
-		log.Panic(err)
+		return nil, err
 	}
-
-	newBlock.Sign(universityIdentity.PrivateKey)
-
-	return newBlock
+	return newBlock, nil
 }
 
 // ValidateChain checks if the entire blockchain is valid
