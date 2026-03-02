@@ -1,4 +1,4 @@
-# Veritas Chain 🎓⛓️
+# Veritas Chain (In Progress) 🎓⛓️
 
 **A Blockchain-Based Academic Credential Verification System**
 
