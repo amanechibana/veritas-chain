@@ -78,6 +78,10 @@ func InitBlockchain(dbPath string, signer identity.Signer) *Blockchain {
 	opts.Dir = dbPath
 	opts.ValueDir = dbPath
 
+	// Check for an existing chain before opening: badger.Open writes the
+	// MANIFEST, after which DBExists always returns true.
+	chainExists := DBExists(dbPath)
+
 	// Ensure directory exists
 	_ = os.MkdirAll(dbPath, 0o755)
 
@@ -87,7 +91,7 @@ func InitBlockchain(dbPath string, signer identity.Signer) *Blockchain {
 	}
 
 	// Check if blockchain already exists
-	if DBExists(dbPath) {
+	if chainExists {
 		// Try to load existing blockchain
 		var lastHash []byte
 		err = db.View(func(txn *badger.Txn) error {

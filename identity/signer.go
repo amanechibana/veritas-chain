@@ -39,7 +39,13 @@ func (s *IdentitySigner) Sign(message []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	signature := append(r.Bytes(), ecdsaS.Bytes()...)
+	// Pad r and s to the curve's fixed byte width: big.Int.Bytes() strips
+	// leading zeros, which yields a short signature ~1/128 of the time and
+	// fails the even-length check in Block.Verify.
+	byteLen := (s.identity.PrivateKey.Curve.Params().BitSize + 7) / 8
+	signature := make([]byte, 2*byteLen)
+	r.FillBytes(signature[:byteLen])
+	ecdsaS.FillBytes(signature[byteLen:])
 	return signature, nil
 }
 
